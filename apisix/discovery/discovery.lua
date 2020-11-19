@@ -20,6 +20,7 @@ local http               = require("resty.http")
 local core               = require("apisix.core")
 local ipmatcher          = require("resty.ipmatcher")
 local ipairs             = ipairs
+local pairs              = pairs
 local string             = string
 local tostring           = tostring
 local type               = type
@@ -149,14 +150,14 @@ local function parse_instance(instance)
     local addrs = instance.addrs
     for _, addr in ipairs(addrs) do
         -- 只支持http协议
-        local sp = string.find(addr, "http://", 1, true)
+        local sp = string_find(addr, "http://", 1, true)
         if sp then
-            local ip_port = string.sub(addr, 8)
+            local ip_port = string_sub(addr, 8)
             -- 分隔IP/Port
-            local sp1 = string.find(ip_port, ":", 1, true)
+            local sp1 = string_find(ip_port, ":", 1, true)
             if sp1 then
-                ip = string.sub(ip_port, 1, sp1-1)
-                port = string.sub(ip_port, sp1+1, -1)
+                ip = string_sub(ip_port, 1, sp1-1)
+                port = string_sub(ip_port, sp1+1, -1)
             end
         end
     end
