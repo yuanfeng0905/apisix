@@ -36,3 +36,18 @@ apisix:
       key: edd1c9f034335f136f87ad84b625c8f1 # using fixed API token has security risk, please
                                             # update it when you deploy to production environment
       role: admin
+
+discovery:                          # service discovery center
+  discovery:
+    host:                           # it's possible to define multiple eureka hosts addresses of the same eureka cluster.
+      - "http://127.0.0.1:7172"
+    fetch_interval: 1              # default 30s
+    weight: 100                     # default weight for node
+    timeout:
+      connect: 2000                 # default 2000ms
+      send: 2000                    # default 2000ms
+      read: 5000                    # default 5000ms
+
+nginx_config:                     # config for render the template to genarate nginx.conf
+    error_log_level: "info"
+    worker_processes: "1"

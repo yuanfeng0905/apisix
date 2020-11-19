@@ -20,6 +20,7 @@ local http               = require("resty.http")
 local core               = require("apisix.core")
 local ipmatcher          = require("resty.ipmatcher")
 local ipairs             = ipairs
+local string             = string
 local tostring           = tostring
 local type               = type
 local math_random        = math.random
@@ -67,14 +68,15 @@ local _M = {
 
 local function service_info()
     local host = local_conf.discovery and
-        local_conf.discovery.eureka and local_conf.discovery.eureka.host
+        local_conf.discovery.discovery and local_conf.discovery.discovery.host
     if not host then
-        log.error("do not set eureka.host")
+        log.error("do not set discovery.host")
         return
     end
 
     local basic_auth
     -- TODO Add health check to get healthy nodes.
+    -- 随机从host池取一个链接
     local url = host[math_random(#host)]
     local auth_idx = string_find(url, "@", 1, true)
     if auth_idx then
@@ -85,8 +87,8 @@ local function service_info()
         url = protocol .. other
         basic_auth = "Basic " .. ngx.encode_base64(user_and_password)
     end
-    if local_conf.discovery.eureka.prefix then
-        url = url .. local_conf.discovery.eureka.prefix
+    if local_conf.discovery.discovery.prefix then
+        url = url .. local_conf.discovery.discovery.prefix
     end
     if string_sub(url, #url) ~= "/" then
         url = url .. "/"
@@ -97,7 +99,7 @@ end
 
 
 local function request(request_uri, basic_auth, method, path, query, body)
-    log.info("eureka uri:", request_uri, ".")
+    log.info("discovery uri:", request_uri, ".")
     local url = request_uri .. path
     local headers = core.table.new(0, 5)
     headers['Connection'] = 'Keep-Alive'
@@ -118,7 +120,7 @@ local function request(request_uri, basic_auth, method, path, query, body)
     end
 
     local httpc = http.new()
-    local timeout = local_conf.discovery.eureka.timeout
+    local timeout = local_conf.discovery.discovery.timeout
     local connect_timeout = timeout and timeout.connect or 2000
     local send_timeout = timeout and timeout.send or 2000
     local read_timeout = timeout and timeout.read or 5000
@@ -138,31 +140,36 @@ end
 
 local function parse_instance(instance)
     local status = instance.status
-    local overridden_status = instance.overriddenstatus or instance.overriddenStatus
-    if overridden_status and overridden_status ~= "UNKNOWN" then
-        status = overridden_status
-    end
-
-    if status ~= "UP" then
+    -- 只选择正常流量节点
+    if status ~= 1 then
         return
     end
-    local port
-    if tostring(instance.port["@enabled"]) == "true" and instance.port["$"] then
-        port = instance.port["$"]
-        -- secure = false
+
+    local port, ip
+    local addrs = instance.addrs
+    for _, addr in ipairs(addrs) do
+        -- 只支持http协议
+        local sp = string.find(addr, "http://", 1, true)
+        if sp then
+            local ip_port = string.sub(addr, 8)
+            -- 分隔IP/Port
+            local sp1 = string.find(ip_port, ":", 1, true)
+            if sp1 then
+                ip = string.sub(ip_port, 1, sp1-1)
+                port = string.sub(ip_port, sp1+1, -1)
+            end
+        end
     end
-    if tostring(instance.securePort["@enabled"]) == "true" and instance.securePort["$"] then
-        port = instance.securePort["$"]
-        -- secure = true
-    end
-    local ip = instance.ipAddr
     if not ipmatcher.parse_ipv4(ip) and
             not ipmatcher.parse_ipv6(ip) then
-        log.error(instance.app, " service ", instance.hostName, " node IP ", ip,
+        log.error(instance.appid, " service node IP ", ip,
                 " is invalid(must be IPv4 or IPv6).")
         return
     end
-    return ip, port, instance.metadata
+    -- metdata 空数据处理
+    local metadata = tostring(instance.metadata) == 'NULL' or {}
+    log.info("appid=", instance.appid, " ip=", ip, " port=", port, " type(metadata)=", type(metadata))
+    return ip, port, metadata
 end
 
 
@@ -176,7 +183,8 @@ local function fetch_full_registry(premature)
         return
     end
 
-    local res, err = request(request_uri, basic_auth, "GET", "apps")
+    -- 拉取所有应用信息
+    local res, err = request(request_uri, basic_auth, "GET", "discovery/fetch/all")
     if not res then
         log.error("failed to fetch registry", err)
         return
@@ -193,26 +201,31 @@ local function fetch_full_registry(premature)
         log.error("invalid response body: ", json_str, " err: ", err)
         return
     end
-    local apps = data.applications.application
+    if data.code ~= 0 then
+        log.error("response code: ", data.code, "err: ", data.message)
+        return
+    end
+
+    local apps = data.data
     local up_apps = core.table.new(0, #apps)
-    for _, app in ipairs(apps) do
-        for _, instance in ipairs(app.instance) do
-            local ip, port, metadata = parse_instance(instance)
+    for app, instances in pairs(apps) do
+        for _, instance in ipairs(instances) do
+            local ip, port, md = parse_instance(instance)
             if ip and port then
-                local nodes = up_apps[app.name]
+                local nodes = up_apps[app]
                 if not nodes then
-                    nodes = core.table.new(#app.instance, 0)
-                    up_apps[app.name] = nodes
+                    nodes = core.table.new(#instances, 0)
+                    up_apps[app] = nodes
                 end
                 core.table.insert(nodes, {
                     host = ip,
                     port = port,
-                    weight = metadata and metadata.weight or default_weight,
-                    metadata = metadata,
+                    weight = md and md.weight or default_weight,
+                    metadata = md,
                 })
-                if metadata then
+                if md then
                     -- remove useless data
-                    metadata.weight = nil
+                    md.weight = nil
                 end
             end
         end
@@ -232,20 +245,20 @@ end
 
 
 function _M.init_worker()
-    if not local_conf.discovery.eureka or
-        not local_conf.discovery.eureka.host or #local_conf.discovery.eureka.host == 0 then
-        error("do not set eureka.host")
+    if not local_conf.discovery.discovery or
+        not local_conf.discovery.discovery.host or #local_conf.discovery.discovery.host == 0 then
+        error("do not set discovery.host")
         return
     end
 
-    local ok, err = core.schema.check(schema, local_conf.discovery.eureka)
+    local ok, err = core.schema.check(schema, local_conf.discovery.discovery)
     if not ok then
-        error("invalid eureka configuration: " .. err)
+        error("invalid discovery configuration: " .. err)
         return
     end
-    default_weight = local_conf.discovery.eureka.weight or 100
+    default_weight = local_conf.discovery.discovery.weight or 100
     log.info("default_weight:", default_weight, ".")
-    local fetch_interval = local_conf.discovery.eureka.fetch_interval or 30
+    local fetch_interval = local_conf.discovery.discovery.fetch_interval or 30
     log.info("fetch_interval:", fetch_interval, ".")
     ngx_timer_at(0, fetch_full_registry)
     ngx_timer_every(fetch_interval, fetch_full_registry)
