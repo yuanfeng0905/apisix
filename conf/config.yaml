@@ -22,6 +22,7 @@
 #       - "http://127.0.0.1:2379"
 #
 apisix:
+  config_center: yaml
   admin_key:
     -
       name: "admin"
