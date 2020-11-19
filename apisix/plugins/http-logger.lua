@@ -38,7 +38,7 @@ local lru_log_format = core.lrucache.new({
 local schema = {
     type = "object",
     properties = {
-        uri = {type = "string"},
+        uri = core.schema.uri_def,
         auth_header = {type = "string", default = ""},
         timeout = {type = "integer", minimum = 1, default = 3},
         name = {type = "string", default = "http logger"},
@@ -115,6 +115,13 @@ local function send_http_data(conf, log_message)
         end
     end
 
+    local content_type
+    if conf.concat_method == "json" then
+        content_type = "application/json"
+    else
+        content_type = "text/plain"
+    end
+
     local httpc_res, httpc_err = httpc:request({
         method = "POST",
         path = url_decoded.path,
@@ -122,7 +129,7 @@ local function send_http_data(conf, log_message)
         body = log_message,
         headers = {
             ["Host"] = url_decoded.host,
-            ["Content-Type"] = "application/json",
+            ["Content-Type"] = content_type,
             ["Authorization"] = conf.auth_header
         }
     })
@@ -151,7 +158,7 @@ local function gen_log_format(metadata)
     end
 
     for k, var_name in pairs(metadata.value.log_format) do
-        if var_name:byte(1, 1) == str_byte("/") then
+        if var_name:byte(1, 1) == str_byte("$") then
             log_format[k] = {true, var_name:sub(2)}
         else
             log_format[k] = {false, var_name}
@@ -217,11 +224,16 @@ function _M.log(conf, ctx)
                 for i, entrie in ipairs(entries) do
                     t[i], err = core.json.encode(entrie)
                     if err then
+                        core.log.warn("failed to encode http log: ", err, ", log data: ", entrie)
                         break
                     end
                 end
                 data = core.table.concat(t, "\n") -- encode as multiple string
             end
+
+        else
+            -- defensive programming check
+            err = "unknown concat_method " .. (conf.concat_method or "nil")
         end
 
         if not data then

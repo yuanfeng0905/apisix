@@ -250,6 +250,11 @@ http {
         ssl_protocols {* ssl.ssl_protocols *};
         ssl_ciphers {* ssl.ssl_ciphers *};
         ssl_prefer_server_ciphers on;
+        {% if ssl.ssl_session_tickets then %}
+        ssl_session_tickets on;
+        {% else %}
+        ssl_session_tickets off;
+        {% end %}
 
         {% else %}
         listen {* port_admin *};
@@ -330,6 +335,11 @@ http {
         ssl_protocols {* ssl.ssl_protocols *};
         ssl_ciphers {* ssl.ssl_ciphers *};
         ssl_prefer_server_ciphers on;
+        {% if ssl.ssl_session_tickets then %}
+        ssl_session_tickets on;
+        {% else %}
+        ssl_session_tickets off;
+        {% end %}
 
         {% if with_module_status then %}
         location = /apisix/nginx_status {
@@ -393,7 +403,6 @@ http {
             proxy_set_header   Upgrade           $upstream_upgrade;
             proxy_set_header   Connection        $upstream_connection;
             proxy_set_header   X-Real-IP         $remote_addr;
-            proxy_pass_header  Server;
             proxy_pass_header  Date;
 
             ### the following x-forwarded-* headers is to send to upstream server
@@ -498,6 +507,8 @@ http {
                 return 200;
             }
 
+            proxy_http_version 1.1;
+            proxy_set_header Host $upstream_host;
             proxy_pass $upstream_mirror_host$request_uri;
         }
         {% end %}

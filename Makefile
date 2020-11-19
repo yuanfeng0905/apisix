@@ -162,6 +162,9 @@ install: default
 	$(INSTALL) -d $(INST_LUADIR)/apisix/plugins/prometheus
 	$(INSTALL) apisix/plugins/prometheus/*.lua $(INST_LUADIR)/apisix/plugins/prometheus/
 
+	$(INSTALL) -d $(INST_LUADIR)/apisix/plugins/serverless
+	$(INSTALL) apisix/plugins/serverless/*.lua $(INST_LUADIR)/apisix/plugins/serverless/
+
 	$(INSTALL) -d $(INST_LUADIR)/apisix/plugins/zipkin
 	$(INSTALL) apisix/plugins/zipkin/*.lua $(INST_LUADIR)/apisix/plugins/zipkin/
 
@@ -179,6 +182,9 @@ install: default
 
 	$(INSTALL) README.md $(INST_CONFDIR)/README.md
 	$(INSTALL) bin/apisix $(INST_BINDIR)/apisix
+	
+	$(INSTALL) -d $(INST_LUADIR)/apisix/plugins/slslog
+	$(INSTALL) apisix/plugins/slslog/*.lua $(INST_LUADIR)/apisix/plugins/slslog/
 
 
 ### test:             Run the test case

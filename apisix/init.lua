@@ -98,6 +98,8 @@ function _M.http_init_worker()
     load_balancer = require("apisix.balancer").run
     require("apisix.admin.init").init_worker()
 
+    require("apisix.timers").init_worker()
+
     router.http_init_worker()
     require("apisix.http.service").init_worker()
     plugin.init_worker()
@@ -117,6 +119,10 @@ function _M.http_init_worker()
     lru_resolved_domain = core.lrucache.new({
         ttl = dns_resolver_valid, count = 512, invalid_stale = true,
     })
+
+    if local_conf.apisix and local_conf.apisix.enable_server_tokens == false then
+        ver_header = "APISIX"
+    end
 end
 
 
@@ -332,8 +338,6 @@ function _M.http_access_phase()
 
     core.ctx.set_vars_meta(api_ctx)
 
-    core.response.set_header("Server", ver_header)
-
     -- load and run global rule
     if router.global_rules and router.global_rules.values
        and #router.global_rules.values > 0 then
@@ -359,8 +363,8 @@ function _M.http_access_phase()
         api_ctx.global_rules = router.global_rules
     end
 
+    local uri = api_ctx.var.uri
     if local_conf.apisix and local_conf.apisix.delete_uri_tail_slash then
-        local uri = api_ctx.var.uri
         if str_byte(uri, #uri) == str_byte("/") then
             api_ctx.var.uri = str_sub(api_ctx.var.uri, 1, #uri - 1)
             core.log.info("remove the end of uri '/', current uri: ",
@@ -368,10 +372,14 @@ function _M.http_access_phase()
         end
     end
 
-    local user_defined_route_matched = router.router_http.match(api_ctx)
-    if not user_defined_route_matched then
-        router.api.match(api_ctx)
+    if core.string.has_prefix(uri, "/apisix/") then
+        local matched = router.api.match(api_ctx)
+        if matched then
+            return
+        end
     end
+
+    router.router_http.match(api_ctx)
 
     local route = api_ctx.matched_route
     if not route then
@@ -387,6 +395,7 @@ function _M.http_access_phase()
         return ngx.exec("@grpc_pass")
     end
 
+    local enable_websocket = route.value.enable_websocket
     if route.value.service_id then
         local service = service_fetch(route.value.service_id)
         if not service then
@@ -401,6 +410,11 @@ function _M.http_access_phase()
         api_ctx.conf_version = route.modifiedIndex .. "&" .. service.modifiedIndex
         api_ctx.conf_id = route.value.id .. "&" .. service.value.id
         api_ctx.service_id = service.value.id
+
+        if enable_websocket == nil then
+            enable_websocket = service.value.enable_websocket
+        end
+
     else
         api_ctx.conf_type = "route"
         api_ctx.conf_version = route.modifiedIndex
@@ -408,7 +422,6 @@ function _M.http_access_phase()
     end
     api_ctx.route_id = route.value.id
 
-    local enable_websocket
     local up_id = route.value.upstream_id
     if up_id then
         local upstreams = core.config.fetch_created_obj("/upstreams")
@@ -437,6 +450,8 @@ function _M.http_access_phase()
             end
 
             if upstream.value.enable_websocket then
+                core.log.warn("DEPRECATE: enable websocket in upstream will be removed soon. ",
+                              "Please enable it in route/service level.")
                 enable_websocket = true
             end
 
@@ -480,6 +495,7 @@ function _M.http_access_phase()
     if enable_websocket then
         api_ctx.var.upstream_upgrade    = api_ctx.var.http_upgrade
         api_ctx.var.upstream_connection = api_ctx.var.http_connection
+        core.log.info("enabled websocket for route: ", route.value.id)
     end
 
     if route.value.script then
@@ -611,6 +627,8 @@ end
 
 
 function _M.http_header_filter_phase()
+    core.response.set_header("Server", ver_header)
+
     common_phase("header_filter")
 end
 
@@ -782,6 +800,10 @@ function _M.stream_init_worker()
 
     router.stream_init_worker()
     plugin.init_worker()
+
+    if core.config == require("apisix.core.config_yaml") then
+        core.config.init_worker()
+    end
 
     load_balancer = require("apisix.balancer").run
 

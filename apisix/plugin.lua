@@ -16,6 +16,7 @@
 --
 local require       = require
 local core          = require("apisix.core")
+local config_util   = require("apisix.core.config_util")
 local pkg_loaded    = package.loaded
 local sort_tab      = table.sort
 local pcall         = pcall
@@ -50,8 +51,31 @@ local _M = {
 }
 
 
+local function plugin_attr(name)
+    -- TODO: get attr from synchronized data
+    local local_conf = core.config.local_conf()
+    return core.table.try_read_attr(local_conf, "plugin_attr", name)
+end
+_M.plugin_attr = plugin_attr
+
+
 local function sort_plugin(l, r)
     return l.priority > r.priority
+end
+
+
+local function unload_plugin(name, is_stream_plugin)
+    local pkg_name = "apisix.plugins." .. name
+    if is_stream_plugin then
+        pkg_name = "apisix.stream.plugins." .. name
+    end
+
+    local old_plugin = pkg_loaded[pkg_name]
+    if old_plugin and type(old_plugin.destory) == "function" then
+        old_plugin.destory()
+    end
+
+    pkg_loaded[pkg_name] = nil
 end
 
 
@@ -60,7 +84,6 @@ local function load_plugin(name, plugins_list, is_stream_plugin)
     if is_stream_plugin then
         pkg_name = "apisix.stream.plugins." .. name
     end
-    pkg_loaded[pkg_name] = nil
 
     local ok, plugin = pcall(require, pkg_name)
     if not ok then
@@ -88,6 +111,7 @@ local function load_plugin(name, plugins_list, is_stream_plugin)
     end
 
     plugin.name = name
+    plugin.attr = plugin_attr(name)
     core.table.insert(plugins_list, plugin)
 
     if plugin.init then
@@ -98,22 +122,50 @@ local function load_plugin(name, plugins_list, is_stream_plugin)
 end
 
 
-local function load()
-    core.table.clear(local_plugins)
-    core.table.clear(local_plugins_hash)
-
-    local_conf = core.config.local_conf(true)
-    local plugin_names = local_conf.plugins
-    if not plugin_names then
-        return nil, "failed to read plugin list from local file"
+local function plugins_eq(old, new)
+    local eq = core.table.set_eq(old, new)
+    if not eq then
+        core.log.info("plugin list changed")
+        return false
     end
 
+    for name, plugin in pairs(old) do
+        eq = core.table.deep_eq(plugin.attr, plugin_attr(name))
+        if not eq then
+            core.log.info("plugin_attr of ", name, " changed")
+            return false
+        end
+    end
+
+    return true
+end
+
+
+local function load(plugin_names)
     local processed = {}
     for _, name in ipairs(plugin_names) do
         if processed[name] == nil then
             processed[name] = true
-            load_plugin(name, local_plugins)
         end
+    end
+
+    -- the same configure may be synchronized more than one
+    if plugins_eq(local_plugins_hash, processed) then
+        core.log.info("plugins not changed")
+        return true
+    end
+
+    core.log.warn("new plugins: ", core.json.delay_encode(processed))
+
+    for name in pairs(local_plugins_hash) do
+        unload_plugin(name)
+    end
+
+    core.table.clear(local_plugins)
+    core.table.clear(local_plugins_hash)
+
+    for name in pairs(processed) do
+        load_plugin(name, local_plugins)
     end
 
     -- sort by plugin's priority
@@ -137,22 +189,31 @@ local function load()
 end
 
 
-local function load_stream()
-    core.table.clear(stream_local_plugins)
-    core.table.clear(stream_local_plugins_hash)
-
-    local plugin_names = local_conf.stream_plugins
-    if not plugin_names then
-        core.log.warn("failed to read stream plugin list from local file")
-        return true
-    end
-
+local function load_stream(plugin_names)
     local processed = {}
     for _, name in ipairs(plugin_names) do
         if processed[name] == nil then
             processed[name] = true
-            load_plugin(name, stream_local_plugins, true)
         end
+    end
+
+    -- the same configure may be synchronized more than one
+    if plugins_eq(stream_local_plugins_hash, processed) then
+        core.log.info("plugins not changed")
+        return true
+    end
+
+    core.log.warn("new plugins: ", core.json.delay_encode(processed))
+
+    for name in pairs(stream_local_plugins_hash) do
+        unload_plugin(name, true)
+    end
+
+    core.table.clear(stream_local_plugins)
+    core.table.clear(stream_local_plugins_hash)
+
+    for name in pairs(processed) do
+        load_plugin(name, stream_local_plugins, true)
     end
 
     -- sort by plugin's priority
@@ -178,19 +239,49 @@ local function load_stream()
 end
 
 
-function _M.load()
-    local_conf = core.config.local_conf(true)
+function _M.load(config)
+    local http_plugin_names
+    local stream_plugin_names
 
-    if ngx.config.subsystem == "http" then
-        local ok, err = load()
-        if not ok then
-            core.log.error("failed to load plugins: ", err)
+    if not config then
+        -- called during starting or hot reload in admin
+        local_conf = core.config.local_conf(true)
+        http_plugin_names = local_conf.plugins
+        stream_plugin_names = local_conf.stream_plugins
+    else
+        -- called during synchronizing plugin data
+        http_plugin_names = {}
+        stream_plugin_names = {}
+        for _, conf_value in config_util.iterate_values(config.values) do
+            local plugins_conf = conf_value.value
+            for _, conf in ipairs(plugins_conf) do
+                if conf.stream then
+                    core.table.insert(stream_plugin_names, conf.name)
+                else
+                    core.table.insert(http_plugin_names, conf.name)
+                end
+            end
         end
     end
 
-    local ok, err = load_stream()
-    if not ok then
-        core.log.error("failed to load stream plugins: ", err)
+    if ngx.config.subsystem == "http"then
+        if not http_plugin_names then
+            core.log.error("failed to read plugin list from local file")
+        else
+            local ok, err = load(http_plugin_names)
+            if not ok then
+                core.log.error("failed to load plugins: ", err)
+            end
+        end
+    end
+
+    if not stream_plugin_names then
+        core.log.warn("failed to read stream plugin list from local file")
+    else
+        local ok, err = load_stream(stream_plugin_names)
+        if not ok then
+            core.log.error("failed to load stream plugins: ", err)
+        end
     end
 
     -- for test
@@ -345,14 +436,44 @@ function _M.merge_consumer_route(route_conf, consumer_conf, api_ctx)
     api_ctx.conf_type = api_ctx.conf_type .. "&consumer"
     api_ctx.conf_version = api_ctx.conf_version .. "&" ..
                            api_ctx.consumer_ver
-    api_ctx.conf_id = api_ctx.conf_id .. "&" .. api_ctx.consumer_id
+    api_ctx.conf_id = api_ctx.conf_id .. "&" .. api_ctx.consumer_name
 
     return new_conf, new_conf ~= route_conf
 end
 
 
+local init_plugins_syncer
+do
+    local plugins_conf
+
+    function init_plugins_syncer()
+        local err
+        plugins_conf, err = core.config.new("/plugins", {
+            automatic = true,
+            item_schema = core.schema.plugins,
+            single_item = true,
+            filter = function()
+                _M.load(plugins_conf)
+            end,
+        })
+        if not plugins_conf then
+            error("failed to create etcd instance for fetching /plugins : " .. err)
+        end
+    end
+end
+
+
 function _M.init_worker()
     _M.load()
+
+    -- some plugins need to be initialized in init* phases
+    if ngx.config.subsystem == "http"then
+        require("apisix.plugins.prometheus.exporter").init()
+    end
+
+    if local_conf and not local_conf.apisix.enable_admin then
+        init_plugins_syncer()
+    end
 
     local plugin_metadatas, err = core.config.new("/plugin_metadata",
         {automatic = true}

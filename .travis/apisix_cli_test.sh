@@ -29,6 +29,8 @@ clean_up() {
 
 trap clean_up EXIT
 
+unset APISIX_PROFILE
+
 git checkout conf/config.yaml
 
 # check 'Server: APISIX' is not in nginx.conf. We already added it in Lua code.
@@ -144,6 +146,50 @@ fi
 
 echo "passed: change default env"
 
+# support environment variables
+echo '
+nginx_config:
+    envs:
+        - ${{var_test}}_${{FOO}}
+' > conf/config.yaml
+
+var_test=TEST FOO=bar make init
+
+if ! grep "env TEST_bar;" conf/nginx.conf > /dev/null; then
+    echo "failed: failed to resolve variables"
+    exit 1
+fi
+
+echo "passed: resolve variables"
+
+echo '
+nginx_config:
+    worker_rlimit_nofile: ${{nofile9}}
+' > conf/config.yaml
+
+nofile9=99999 make init
+
+if ! grep "worker_rlimit_nofile 99999;" conf/nginx.conf > /dev/null; then
+    echo "failed: failed to resolve variables as integer"
+    exit 1
+fi
+
+echo "passed: resolve variables as integer"
+
+echo '
+apisix:
+    enable_admin: ${{admin}}
+' > conf/config.yaml
+
+admin=false make init
+
+if grep "location /apisix/admin" conf/nginx.conf > /dev/null; then
+    echo "failed: failed to resolve variables as boolean"
+    exit 1
+fi
+
+echo "passed: resolve variables as boolean"
+
 # check nameserver imported
 git checkout conf/config.yaml
 
@@ -220,7 +266,7 @@ fi
 
 make run
 
-code=$(curl -k -i -m 20 -o /dev/null -s -w %{http_code} https://127.0.0.1:9180/apisix/admin/routes -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1')
+code=$(curl -v -k -i -m 20 -o /dev/null -s -w %{http_code} https://127.0.0.1:9180/apisix/admin/routes -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1')
 if [ ! $code -eq 200 ]; then
     echo "failed: failed to enabled https for admin"
     exit 1
@@ -294,7 +340,12 @@ echo "passed: empty allow_admin in conf/config.yaml"
 # check the 'client_max_body_size' in 'nginx.conf' .
 
 git checkout conf/config.yaml
-sed -i 's/client_max_body_size: 0/client_max_body_size: 512m/'  conf/config-default.yaml
+
+echo '
+nginx_config:
+    http:
+        client_max_body_size: 512m
+' > conf/config.yaml
 
 make init
 
@@ -304,8 +355,6 @@ if ! grep -E "client_max_body_size 512m" conf/nginx.conf > /dev/null; then
 fi
 
 echo "passed: client_max_body_size in nginx.conf is ok"
-
-git checkout conf/config-default.yaml
 
 # check worker processes number is configurable.
 
@@ -441,6 +490,34 @@ if [ $count -ne 1 ]; then
 fi
 
 echo "passed: using env to set worker processes"
+
+# set worker processes with env
+git checkout conf/config.yaml
+
+make init
+
+count=`grep -c "ssl_session_tickets off;" conf/nginx.conf || true `
+if [ $count -eq 0 ]; then
+    echo "failed: ssl_session_tickets is off when ssl.ssl_session_tickets is false."
+    exit 1
+fi
+
+echo '
+apisix:
+    ssl:
+        enable: true
+        ssl_session_tickets: true
+' > conf/config.yaml
+
+make init
+
+count=`grep -c "ssl_session_tickets on;" conf/nginx.conf || true `
+if [ $count -eq 0 ]; then
+    echo "failed: ssl_session_tickets is on when ssl.ssl_session_tickets is true."
+    exit 1
+fi
+
+echo "passed: disable ssl_session_tickets by default"
 
 # access log with JSON format
 

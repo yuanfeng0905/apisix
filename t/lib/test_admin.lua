@@ -19,7 +19,7 @@ local json              = require("cjson.safe")
 local core              = require("apisix.core")
 local aes               = require "resty.aes"
 local ngx_encode_base64 = ngx.encode_base64
-local str_find          = string.find
+local str_find          = core.string.find
 local dir_names         = {}
 
 
@@ -127,6 +127,21 @@ function _M.comp_tab(left_tab, right_tab)
     end
 
     return true
+end
+
+
+function _M.set_config_yaml(data)
+    local fn
+    local profile = os.getenv("APISIX_PROFILE")
+    if profile then
+        fn = "config-" .. profile .. ".yaml"
+    else
+        fn = "config.yaml"
+    end
+
+    local f = assert(io.open(os.getenv("TEST_NGINX_HTML_DIR") .. "/../conf/" .. fn, 'w'))
+    assert(f:write(data))
+    f:close()
 end
 
 
