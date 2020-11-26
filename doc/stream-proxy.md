@@ -35,10 +35,10 @@ apisix:
   stream_proxy:                 # TCP/UDP proxy
     tcp:                        # TCP proxy address list
       - 9100
-      - 127.0.0.1:9101
+      - "127.0.0.1:9101"
     udp:                        # UDP proxy address list
       - 9200
-      - 127.0.0.1:9211
+      - "127.0.0.1:9211"
 ```
 
 ## How to set route?
@@ -46,7 +46,7 @@ apisix:
 Here is a mini example:
 
 ```shell
-curl http://127.0.0.1:9080/apisix/admin/stream_routes/1 -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+curl http://127.0.0.1:9180/apisix/admin/stream_routes/1 -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
 {
     "remote_addr": "127.0.0.1",
     "upstream": {
@@ -67,7 +67,7 @@ For more use cases, please take a look at [test case](../t/stream-node/sanity.t)
 And we can add more limit options to match a route, here is an example:
 
 ```shell
-curl http://127.0.0.1:9080/apisix/admin/stream_routes/1 -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+curl http://127.0.0.1:9180/apisix/admin/stream_routes/1 -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
 {
     "server_addr": "127.0.0.1",
     "server_port": 2000,
