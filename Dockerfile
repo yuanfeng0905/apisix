@@ -31,8 +31,10 @@ COPY --from=production-stage /usr/local/openresty/ /usr/local/openresty/
 COPY --from=production-stage /usr/local/apisix/ /usr/local/apisix/
 COPY --from=production-stage /usr/bin/apisix /usr/bin/apisix
 
-# 自定义部分
-COPY apisix/discovery /usr/local/apisix/discovery
+# 自定义服务发现插件
+COPY apisix/discovery/discovery.lua /usr/local/apisix/apisix/discovery/discovery.lua
+COPY conf/config.yaml /usr/local/apisix/conf/config.yaml
+COPY conf/apisix.yaml /usr/local/apisix/conf/apisix.yaml
 
 ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/nginx/sbin:/usr/local/openresty/bin
 
