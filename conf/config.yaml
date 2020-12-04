@@ -49,5 +49,8 @@ discovery:                          # service discovery center
       read: 5000                    # default 5000ms
 
 nginx_config:                     # config for render the template to genarate nginx.conf
-    error_log_level: "info"
-    worker_processes: "1"
+  error_log_level: "error"
+  error_log: "/dev/stdout"
+  worker_processes: "1"
+  http:
+    access_log: "/dev/stdout"
