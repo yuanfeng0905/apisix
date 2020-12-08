@@ -40,7 +40,7 @@ apisix:
 discovery:                          # service discovery center
   discovery:
     host:                           # it's possible to define multiple eureka hosts addresses of the same eureka cluster.
-      - "http://127.0.0.1:7172"
+      - "http://${{DISCOVERY_NODES}}" # 从环境变量设置discovery nodes
     fetch_interval: 1              # default 30s
     weight: 100                     # default weight for node
     timeout:
@@ -50,7 +50,7 @@ discovery:                          # service discovery center
 
 nginx_config:                     # config for render the template to genarate nginx.conf
   error_log_level: "error"
-  error_log: "/dev/stdout"
+  error_log: "/dev/stdout"  # 错误输出到标准输出
   worker_processes: "1"
   http:
-    access_log: "/dev/stdout"
+    access_log: "/dev/stdout" # 访问日志输出到标准输出
